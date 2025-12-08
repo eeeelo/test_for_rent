@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>房屋租赁水电费管理系统 (云端安全版)</title>
-    <script src="https://imgcache.qq.com/qcloud/cloudbase-js-sdk/1.5.0/cloudbase.full.js"></script> 
+    <title>房屋租赁水电费管理系统 (离线本地版)</title>
     
     <style>
         :root {
@@ -27,7 +26,7 @@
             margin: 0 auto;
         }
 
-        /* 顶部备份工具栏 */
+        /* 顶部工具栏 */
         .top-tools {
             text-align: right;
             margin-bottom: 15px;
@@ -169,7 +168,7 @@
         
         .bill-info {
             display: flex;
-            justify-content: space-between; /* 只有两个元素时，分别靠左和靠右 */
+            justify-content: space-between;
             margin-bottom: 10px;
             font-size: 14px;
             border-bottom: 1px solid #000;
@@ -207,7 +206,7 @@
             font-size: 12px;
             color: #666;
             display: flex;
-            justify-content: flex-end; /* 只保留右侧提示，所以靠右 */
+            justify-content: flex-end;
         }
 
         /* 响应式调整 */
@@ -231,20 +230,20 @@
 <body>
 
 <div id="auth-page" style="max-width: 400px; margin: 100px auto; padding: 20px; background: white; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center;">
-    <h2>管理员登录</h2>
-    <p>请使用您在腾讯云开发 (TCB) 中设置的管理员账号登录。</p>
+    <h2>管理员登录 (本地版)</h2>
+    <p style="color:red; font-weight:bold;">当前密码：123456</p>
     <div class="form-group">
-        <input type="email" id="loginEmail" placeholder="邮箱" required style="margin-bottom: 10px;">
-        <input type="password" id="loginPassword" placeholder="密码" required style="margin-bottom: 10px;">
+        <input type="password" id="loginPassword" placeholder="管理员密码" required style="margin-bottom: 10px;">
     </div>
-    <button class="action-btn" style="width: 100%; margin-top: 0;" onclick="tcbLogin()">登录系统</button>
+    <button class="action-btn" style="width: 100%; margin-top: 0;" onclick="localLogin()">登录系统</button>
 </div>
 
 <div id="app-content" style="display:none;">
     <div class="container">
         <div class="top-tools">
             <span>💾 数据安全：</span>
-            <button class="link-btn" onclick="tcbLogout()">退出登录</button> <button class="link-btn" onclick="exportData()">导出备份 (云端)</button>
+            <button class="link-btn" onclick="localLogout()">退出登录</button>
+            <button class="link-btn" onclick="exportData()">导出备份 (本地)</button>
             <button class="link-btn" onclick="document.getElementById('fileInput').click()">恢复数据 (导入)</button>
             <input type="file" id="fileInput" style="display:none" onchange="importData(this)" accept=".json">
         </div>
@@ -306,7 +305,7 @@
                     </div>
                 </div>
 
-                <button type="button" class="action-btn" onclick="saveRecord()">保存记录 & 更新金额设置 (云端同步)</button>
+                <button type="button" class="action-btn" onclick="saveRecord()">保存记录 & 更新金额设置</button>
             </form>
         </div>
 
@@ -396,123 +395,103 @@
 <div id="toast" class="toast"></div>
 
 <script>
-    // ================= 配置与初始化 =================
+    // ================= 配置与初始化 (本地存储版) =================
 
-    // 您的 TCB 完整环境 ID (已为您校正)
-    const TCB_ENV_ID = 'test-for-rent1204-3e8tz88db6407a'; 
-    const TCB_COLLECTION_NAME = 'tenants'; // 数据库集合名
-    let tcbApp; // TCB 应用实例
-    
+    const DB_KEY = 'RENT_MANAGER_DATA';
+    const ADMIN_PASSWORD = '123456'; // 管理员密码
     const ROOM_LIST = ["101", "201", "202", "203", "204", "301", "302", "303", "304"];
     const PRICE_WATER = 5.0;
     const PRICE_ELEC = 0.8;
+    let db = []; // 内存中的数据
 
     window.onload = function() {
-        // TCB 初始化
-        tcbApp = cloudbase.init({
-            env: TCB_ENV_ID
-        });
-        
-        // 监听登录状态变化，决定显示登录页还是内容页
-        tcbApp.auth().onUserStateChange(handleLoginState);
+        // 检查登录状态
+        if (sessionStorage.getItem('isLoggedIn') === 'true') {
+            handleLoginState(true);
+        }
         
         // 默认选中今天
         document.getElementById('inputDate').valueAsDate = new Date();
     };
 
-    // ================= 权限控制逻辑 =================
+    // ================= 权限控制逻辑 (本地Session) =================
     
-    function handleLoginState(userInfo) {
-        if (userInfo.logged) {
+    function handleLoginState(isLoggedIn) {
+        if (isLoggedIn) {
             // 已登录：显示应用内容
             document.getElementById('auth-page').style.display = 'none';
             document.getElementById('app-content').style.display = 'block';
             
-            initDB(); // 登录后初始化数据库（检查数据是否存在，如果不存在则创建）
-            
+            initDB(); // 初始化数据库（从本地存储加载或创建初始数据）
+            populateSelects();
+            loadSmartPrevData();
             showToast("欢迎回来！");
         } else {
             // 未登录：显示登录页面
             document.getElementById('auth-page').style.display = 'block';
             document.getElementById('app-content').style.display = 'none';
+            sessionStorage.removeItem('isLoggedIn'); // 确保状态清除
         }
     }
     
-    async function tcbLogin() {
-        const email = document.getElementById('loginEmail').value;
+    function localLogin() {
         const password = document.getElementById('loginPassword').value;
         
-        try {
-            // 使用邮箱密码登录 TCB
-            await tcbApp.auth().signInWithEmailAndPassword(email, password);
-            // 登录成功会自动触发 handleLoginState，显示内容页
-        } catch (e) {
-            alert("登录失败，请检查邮箱和密码是否正确。");
-            console.error("TCB 登录错误:", e);
+        if (password === ADMIN_PASSWORD) {
+            sessionStorage.setItem('isLoggedIn', 'true'); // 标记已登录
+            handleLoginState(true);
+        } else {
+            alert("登录失败，请检查密码是否正确。");
         }
     }
     
-    async function tcbLogout() {
-        await tcbApp.auth().signOut();
+    function localLogout() {
+        sessionStorage.removeItem('isLoggedIn');
+        handleLoginState(false);
         showToast("已安全退出");
     }
 
-    // ================= 数据层逻辑 (TCB 替换 localStorage) =================
 
-    // 从云数据库获取所有数据
-    // 返回所有租户的 Array
-    async function getDB() {
-        try {
-            // 查询租户集合中的所有记录
-            const res = await tcbApp.database().collection(TCB_COLLECTION_NAME).get();
-            
-            // TCB 的结果在 res.data 中
-            return res.data; 
-        } catch(e) {
-            console.error("获取数据失败，请检查数据库权限或网络连接。", e);
-            alert("加载数据失败，请检查 TCB 环境 ID 和网络连接。");
-            return [];
+    // ================= 数据层逻辑 (LocalStorage) =================
+
+    // 从本地存储获取数据
+    function getDB() {
+        const dataStr = localStorage.getItem(DB_KEY);
+        if (dataStr) {
+            db = JSON.parse(dataStr);
+        } else {
+            db = [];
         }
+        return db;
     }
     
-    // 初始化数据库：如果 tenants 集合中没有数据，则批量创建 9 个房号的初始记录
-    async function initDB() {
-        const data = await getDB();
+    // 保存数据到本地存储
+    function saveDB(data) {
+        localStorage.setItem(DB_KEY, JSON.stringify(data));
+        db = data; // 更新内存中的数据
+    }
+    
+    // 初始化数据库：如果本地存储没有数据，则批量创建 9 个房号的初始记录
+    function initDB() {
+        getDB(); // 从本地存储加载数据
         
-        // 确保 UI 元素有值
-        populateSelects();
-        loadSmartPrevData();
-
-        if (data.length === 0) {
+        if (db.length === 0) {
             const initialData = ROOM_LIST.map(room => ({
                 房号: room,
                 固定租金: 3000,
                 押金: 3000,
                 水电费记录: [],
             }));
-            
-            // 批量添加初始数据
-            try {
-                const db = tcbApp.database();
-                for (const item of initialData) {
-                    await db.collection(TCB_COLLECTION_NAME).add(item);
-                }
-                showToast("✅ 数据库初始化完成，请开始录入！");
-                // 重新加载数据，确保 UI 绑定到有 _id 的 TCB 记录
-                setTimeout(() => loadSmartPrevData(), 1000); 
-            } catch (e) {
-                console.error("数据库初始化失败", e);
-                alert("数据库初始化失败，请检查 TCB 安全规则是否正确。");
-            }
+            saveDB(initialData);
+            showToast("✅ 数据库初始化完成，请开始录入！");
         }
     }
 
-    // ================= UI 交互 =================
+    // ================= UI 交互 & 核心功能 (与云端版逻辑相同) =================
 
-    // 填充房号下拉菜单 (从云端数据填充)
-    async function populateSelects() {
-        const data = await getDB(); // 确保获取最新数据
-        const rooms = data;
+    // 填充房号下拉菜单
+    function populateSelects() {
+        const rooms = getDB();
         const inputSelect = document.getElementById('inputRoom');
         const viewSelect = document.getElementById('viewRoom');
         
@@ -525,7 +504,6 @@
             viewSelect.add(new Option(`${room.房号}`, room.房号));
         });
         
-        // 默认选中第一个房号后，加载数据
         if (rooms.length > 0) {
              loadSmartPrevData();
         }
@@ -540,7 +518,6 @@
         if(tabName === 'record') btns[0].classList.add('active');
         else {
             btns[1].classList.add('active');
-            // 切换到账单页时，才填充日期列表
             if (document.getElementById('viewRoom').value) {
                 populateRecordDates(); 
             }
@@ -554,16 +531,14 @@
         setTimeout(() => t.style.display = 'none', 2000);
     }
 
-    // ================= 核心 A: 抄表录入 =================
-
-    async function loadSmartPrevData() {
+    // A: 抄表录入
+    function loadSmartPrevData() {
         const roomId = document.getElementById('inputRoom').value;
         const inputDate = document.getElementById('inputDate').value;
         
         if (!roomId || !inputDate) return;
 
-        const db = await getDB(); // 获取云端数据
-        const tenant = db.find(t => t.房号 === roomId);
+        const tenant = getDB().find(t => t.房号 === roomId);
 
         if (!tenant) return;
 
@@ -593,9 +568,8 @@
             document.getElementById('prevWater').readOnly = true;
             document.getElementById('prevElec').readOnly = true;
         } else {
-            // 第一次录入或没有更早记录
-            document.getElementById('prevWater').value = 0; // 默认初始化为0
-            document.getElementById('prevElec').value = 0; // 默认初始化为0
+            document.getElementById('prevWater').value = 0;
+            document.getElementById('prevElec').value = 0;
             document.getElementById('txtPrevWaterDate').innerText = "无";
             document.getElementById('txtPrevElecDate').innerText = "无";
             document.getElementById('prevWater').readOnly = false;
@@ -603,15 +577,13 @@
         }
     }
 
-    async function saveRecord() {
+    function saveRecord() {
         const roomId = document.getElementById('inputRoom').value;
         const date = document.getElementById('inputDate').value;
         
-        // 获取基础信息（允许用户修改）
         const rent = parseFloat(document.getElementById('inputRent').value) || 0;
         const deposit = parseFloat(document.getElementById('inputDeposit').value) || 0;
         
-        // 获取读数
         const prevWater = parseFloat(document.getElementById('prevWater').value);
         const currWater = parseFloat(document.getElementById('currWater').value);
         const prevElec = parseFloat(document.getElementById('prevElec').value);
@@ -627,17 +599,12 @@
             return;
         }
 
-        const db = await getDB();
         const tIdx = db.findIndex(t => t.房号 === roomId);
         
         if (tIdx === -1) {
-             return alert("找不到该房号记录，请检查数据库初始化情况！");
+             return alert("找不到该房号记录！");
         }
         
-        // 获取 TCB 数据库中的 _id，用于更新
-        const TCB_DOC_ID = db[tIdx]._id; 
-
-        // === 构造待保存的记录 ===
         const newRecord = {
             日期: date,
             上月水表: prevWater,
@@ -657,66 +624,54 @@
             currentRecords.push(newRecord);
         }
 
-        // 排序
         currentRecords.sort((a, b) => new Date(a.日期) - new Date(b.日期));
         
-        // ！！！ 执行 TCB 更新操作 ！！！
-        try {
-            await tcbApp.database().collection(TCB_COLLECTION_NAME).doc(TCB_DOC_ID).update({
-                data: { // TCB update 需要用 data 包裹字段
-                    水电费记录: currentRecords,
-                    固定租金: rent,
-                    押金: deposit,
-                }
-            });
-            showToast("✅ 云端数据保存成功 (金额设置已更新)");
-            
-            // 保存成功后，刷新 UI
-            populateSelects();
-            loadSmartPrevData();
-            document.getElementById('currWater').value = '';
-            document.getElementById('currElec').value = '';
+        // 更新租户的固定信息和记录
+        db[tIdx].水电费记录 = currentRecords;
+        db[tIdx].固定租金 = rent;
+        db[tIdx].押金 = deposit;
 
-        } catch (e) {
-            console.error("云端保存失败:", e);
-            alert("保存失败，请检查 TCB 权限或网络连接！");
-        }
+        saveDB(db); // 保存到本地存储
+
+        showToast("✅ 本地数据保存成功 (金额设置已更新)");
+            
+        // 刷新 UI
+        populateSelects();
+        loadSmartPrevData();
+        document.getElementById('currWater').value = '';
+        document.getElementById('currElec').value = '';
     }
 
-    // ================= 核心 B: 账单生成 =================
-
-    async function populateRecordDates() {
+    // B: 账单生成
+    function populateRecordDates() {
         const roomId = document.getElementById('viewRoom').value;
         const select = document.getElementById('viewRecordDate');
         select.innerHTML = '<option value="">-- 选择抄表日期 --</option>';
 
-        const db = await getDB();
-        const tenant = db.find(t => t.房号 === roomId);
+        const tenant = getDB().find(t => t.房号 === roomId);
 
         if (tenant && tenant.水电费记录.length > 0) {
-            // 倒序
             [...tenant.水电费记录].reverse().forEach(r => {
                 select.add(new Option(r.日期, r.日期));
             });
         }
     }
 
-    async function generateBill() {
+    function generateBill() {
         const roomId = document.getElementById('viewRoom').value;
         const date = document.getElementById('viewRecordDate').value;
         const billArea = document.getElementById('billArea');
 
         if(!date) return alert("请选择一个日期");
 
-        const db = await getDB();
-        const tenant = db.find(t => t.房号 === roomId);
+        const tenant = getDB().find(t => t.房号 === roomId);
         const record = tenant.水电费记录.find(r => r.日期 === date);
 
         billArea.style.display = 'block';
 
-        // 1. 计算费用所属月份 (抄表日期的上个月)
+        // 1. 计算费用所属月份
         const dObj = new Date(date);
-        dObj.setDate(dObj.getDate() + 1); // 解决时区问题
+        dObj.setDate(dObj.getDate() + 1); 
         dObj.setMonth(dObj.getMonth() - 1);
         const billMonthStr = `${dObj.getFullYear()}年${dObj.getMonth() + 1}月`;
 
@@ -750,75 +705,44 @@
         document.getElementById('tTotal').innerText = total.toFixed(2);
     }
 
-    // ================= 数据备份与恢复 (基于云端数据) =================
+    // 数据备份与恢复 (LocalStorage)
 
-    // 导出云端数据
-    async function exportData() {
-        const db = await getDB(); // 从云端获取数据
-        if (db.length === 0) return alert("云端没有数据可导出");
+    function exportData() {
+        const data = localStorage.getItem(DB_KEY);
+        if (!data) return alert("没有数据可导出");
         
-        // 导出格式与原有 localStorage 格式相似，方便导入
-        const exportableData = db.map(item => ({
-            房号: item.房号,
-            固定租金: item.固定租金,
-            押金: item.押金,
-            水电费记录: item.水电费记录,
-        }));
-        
-        const jsonString = JSON.stringify(exportableData, null, 2);
+        const jsonString = JSON.stringify(JSON.parse(data), null, 2);
         const blob = new Blob([jsonString], {type: "application/json"});
         const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        a.download = `房租备份_TCB_${new Date().toISOString().split('T')[0]}.json`;
+        a.download = `房租备份_本地_${new Date().toISOString().split('T')[0]}.json`;
         a.click();
-        showToast("✅ 云端数据已导出备份");
+        showToast("✅ 本地数据已导出备份");
     }
 
-    // 导入数据：导入后会尝试更新云端记录
-    async function importData(input) {
+    function importData(input) {
         const file = input.files[0];
         if (!file) return;
 
-        if(!confirm("⚠️ 确定恢复数据？导入的数据将与云端现有记录进行合并/覆盖！")) return;
+        if(!confirm("⚠️ 确定恢复数据？导入的数据将覆盖本地所有现有记录！")) return;
 
         const reader = new FileReader();
-        reader.onload = async function(e) {
+        reader.onload = function(e) {
             try {
                 const importedData = JSON.parse(e.target.result);
                 if (!Array.isArray(importedData) || !importedData[0].房号) {
                     return alert("文件格式错误，请确保导入的是正确的 JSON 备份文件。");
                 }
-
-                const db = await getDB();
-                const dbInstance = tcbApp.database();
-
-                for (const importedTenant of importedData) {
-                    const existingTenant = db.find(t => t.房号 === importedTenant.房号);
-                    
-                    if (existingTenant) {
-                        // 1. 合并/覆盖记录：用导入文件的记录完全覆盖云端记录
-                        const newRecords = importedTenant.水电费记录 || [];
-                        
-                        // 2. 更新云端记录
-                        await dbInstance.collection(TCB_COLLECTION_NAME).doc(existingTenant._id).update({
-                            data: {
-                                固定租金: importedTenant.固定租金,
-                                押金: importedTenant.押金,
-                                水电费记录: newRecords,
-                            }
-                        });
-                    } else {
-                        // 3. 如果云端没有这个房号，则新增
-                        await dbInstance.collection(TCB_COLLECTION_NAME).add(importedTenant);
-                    }
-                }
                 
-                showToast("✅ 数据导入并更新至云端成功！正在刷新...");
-                setTimeout(() => location.reload(), 2000);
+                // 直接覆盖本地存储
+                saveDB(importedData);
+                
+                showToast("✅ 数据导入成功！正在刷新...");
+                setTimeout(() => location.reload(), 1000);
 
             } catch(err) { 
                 console.error(err);
-                alert("文件读取或数据更新失败，请检查文件内容和 TCB 权限。"); 
+                alert("文件读取失败，请检查文件内容。"); 
             }
         };
         reader.readAsText(file);
